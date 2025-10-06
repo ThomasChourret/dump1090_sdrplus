@@ -4,22 +4,60 @@
   <meta name="viewport" content="initial-scale=1.0, user-scalable=no" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
   <style>
-    html, body { height: 100%; margin: 0; padding: 0; }
-    #map { width: 80%; height: 100%; float: left; }
-    #info {
-      position: absolute;
-      width: 20%;
+    html, body {
       height: 100%;
-      right: 0;
-      top: 0;
-      background-color: white;
-      border-left: 1px solid #666;
-      font-family: Helvetica;
-      padding-left: 10px;
+      margin: 0;
+      padding: 0;
+      font-family: Helvetica, Arial, sans-serif;
+      overflow: hidden;
     }
-    #info h1 { margin-top: 10px; font-size: 16px; }
-    #info p { font-size: 14px; color: #333; }
+
+    /* Use flexbox for perfect alignment instead of float/absolute */
+    body {
+      display: flex;
+      flex-direction: row;
+    }
+
+    #map {
+      flex: 1;
+      height: 100%;
+    }
+
+    #info {
+      width: 22%;
+      min-width: 250px;
+      height: 100%;
+      background-color: #f8f8f8;
+      border-left: 2px solid #666;
+      box-sizing: border-box;
+      padding: 15px;
+      overflow-y: auto;
+    }
+
+    #info h1 {
+      margin-top: 0;
+      font-size: 18px;
+      border-bottom: 1px solid #ccc;
+      padding-bottom: 5px;
+    }
+
+    #info p, #info div {
+      font-size: 14px;
+      color: #333;
+      margin: 6px 0;
+      line-height: 1.4;
+    }
+
+    .plane-info {
+      margin-top: 10px;
+      padding: 10px;
+      background: #fff;
+      border-radius: 8px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+      border: 1px solid #ddd;
+    }
   </style>
+
   <script src="https://code.jquery.com/jquery-1.12.4.min.js"></script>
   <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
 </head>
@@ -27,8 +65,9 @@
   <div id="map"></div>
   <div id="info">
     <h1>Dump1090_sdrplus</h1>
-    <p id="geninfo"></p>
-    <p id="selinfo">Click on a plane for info.</p>
+    <p id="geninfo">Loading planes...</p>
+    <p id="lastupdate"></p>
+    <div id="selinfo">Click on a plane for details.</div>
   </div>
 
   <script>
@@ -52,7 +91,7 @@
       return L.divIcon({
         className: '',
         html: `<div style="transform: rotate(${plane.track}deg); 
-                    width:10px; height:10px; 
+                    width:12px; height:12px; 
                     background-color:${color}; 
                     clip-path: polygon(50% 0%, 0% 100%, 100% 100%);"></div>`,
         iconSize: [20, 20],
@@ -75,7 +114,26 @@
     }
 
     function refreshGeneralInfo() {
-      document.getElementById('geninfo').innerText = NumPlanes + ' planes on screen.';
+      let totalAlt = 0, totalSpeed = 0, minAlt = Infinity, maxAlt = -Infinity;
+      for (let hex in Planes) {
+        const p = Planes[hex];
+        totalAlt += p.altitude;
+        totalSpeed += p.speed;
+        if (p.altitude < minAlt) minAlt = p.altitude;
+        if (p.altitude > maxAlt) maxAlt = p.altitude;
+      }
+      const avgAlt = NumPlanes ? Math.round(totalAlt / NumPlanes) : 0;
+      const avgSpeed = NumPlanes ? Math.round(totalSpeed / NumPlanes) : 0;
+
+      document.getElementById('geninfo').innerHTML =
+        `<strong>Planes on screen:</strong> ${NumPlanes}<br>` +
+        `Average Altitude: ${avgAlt} ft<br>` +
+        `Average Speed: ${avgSpeed} knots<br>` +
+        `Lowest Altitude: ${minAlt === Infinity ? 0 : minAlt} ft<br>` +
+        `Highest Altitude: ${maxAlt === -Infinity ? 0 : maxAlt} ft`;
+
+      document.getElementById('lastupdate').innerText =
+        'Last Updated: ' + new Date().toLocaleTimeString();
     }
 
     function refreshSelectedInfo() {
@@ -83,11 +141,15 @@
       const p = Planes[Selected];
       if (!p) return;
 
-      let html = 'ICAO: ' + p.hex + '<br>';
-      if (p.flight.length) html += '<b>' + p.flight + '</b><br>';
-      html += 'Altitude: ' + p.altitude + ' feet<br>';
-      html += 'Speed: ' + p.speed + ' knots<br>';
-      html += 'Coordinates: ' + p.lat + ', ' + p.lon + '<br>';
+      let html = '<div class="plane-info">';
+      html += '<strong>ICAO:</strong> ' + p.hex + '<br>';
+      if (p.flight.length) html += '<strong>Flight:</strong> ' + p.flight + '<br>';
+      html += '<strong>Altitude:</strong> ' + p.altitude + ' ft<br>';
+      html += '<strong>Speed:</strong> ' + p.speed + ' knots<br>';
+      html += '<strong>Vertical Speed:</strong> ' + (p.vspeed || 'N/A') + ' fpm<br>';
+      html += '<strong>Heading:</strong> ' + p.track + '°<br>';
+      html += '<strong>Coordinates:</strong> ' + p.lat.toFixed(4) + ', ' + p.lon.toFixed(4);
+      html += '</div>';
       info.innerHTML = html;
     }
 
@@ -106,9 +168,11 @@
             myPlane.speed = plane.speed;
             myPlane.track = plane.track;
             myPlane.flight = plane.flight;
+            myPlane.vspeed = plane.vspeed || 0;
 
             myPlane.marker.setLatLng([plane.lat, plane.lon]);
             myPlane.marker.setIcon(getIconForPlane(plane));
+            myPlane.marker.bindTooltip(`${plane.flight || plane.hex}<br>${plane.altitude} ft`, {direction: 'top'});
 
             if (myPlane.hex === Selected) refreshSelectedInfo();
           } else {
@@ -117,6 +181,7 @@
               planehex: plane.hex
             }).addTo(map);
             marker.on('click', selectPlane);
+            marker.bindTooltip(`${plane.flight || plane.hex}<br>${plane.altitude} ft`, {direction: 'top'});
             Planes[plane.hex] = { ...plane, marker };
           }
         });
